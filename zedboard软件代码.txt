@@ -1,0 +1,729 @@
+/******************************************************************************
+*
+* Copyright (C) 2009 - 2014 Xilinx, Inc.  All rights reserved.
+*
+* Permission is hereby granted, free of charge, to any person obtaining a copy
+* of this software and associated documentation files (the "Software"), to deal
+* in the Software without restriction, including without limitation the rights
+* to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+* copies of the Software, and to permit persons to whom the Software is
+* furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* Use of the Software is limited solely to applications:
+* (a) running on a Xilinx device, or
+* (b) that interact with a Xilinx device through a bus or interconnect.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+* XILINX  BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+* WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
+* OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+* SOFTWARE.
+*
+* Except as contained in this notice, the name of the Xilinx shall not be used
+* in advertising or otherwise to promote the sale, use or other dealings in
+* this Software without prior written authorization from Xilinx.
+*
+******************************************************************************/
+#include <stdlib.h>
+#include "xil_io.h"
+#include <stdio.h>
+#include <string.h>
+#include "DDS_AXI.h"
+#include "lwip/err.h"
+#include "lwip/tcp.h"
+#if defined (__arm__) || defined (__aarch64__)
+#include "xil_printf.h"
+#endif
+#define Local 8
+#define DDR_BASEADDR   XPAR_DDR_MEM_BASEADDR+0x10000000
+#define DDS_BASEADDR	0x43C00000
+int transfer_data() {
+	return 0;
+}
+
+
+void print_app_header()
+{
+	xil_printf("\n\r\n\r-----lwIP TCP echo server ------\n\r");
+	xil_printf("TCP packets sent to port 6001 will be echoed back\n\r");
+}
+
+
+
+err_t recv_callback(void *arg, struct tcp_pcb *tpcb,
+                               struct pbuf *p, err_t err)
+{
+	//公用参数
+	u8_t channel_flag=0;
+	unsigned char a[]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+	//示波器所用参数
+	static u8_t vertical_resolution1,vertical_resolution2,horizontal_resolution;
+	static u8_t trigger0,trigger1,trigger2;
+	u16_t k,q,m,s,show,test_len;
+	u16_t i,rev;
+	u8_t send_flag=0,legal_flag=1;
+	u8_t error[2]={2,2},ok[2]={2,1};
+	unsigned short test_wave[2500];
+	//信号发生器所用参数全局变量
+	extern u8_t trans_flag1;
+	extern u8_t trans_flag2;
+	extern u8_t w1;//波形
+	extern u8_t A1;//幅度
+	extern u32_t K1;//频率控制字
+	extern u8_t OS1;//直流偏移
+	extern u8_t w2;//波形
+	extern u8_t A2;//幅度
+	extern u32_t K2;//频率控制字
+	extern u8_t OS2;//直流偏移
+	extern u32_t x11;
+	extern u32_t x12;
+	extern u32_t x13;
+	extern u32_t x14;
+	extern u32_t x21;
+	extern u32_t x22;
+	extern u32_t x23;
+	extern u32_t x24;//观察送过去的参数
+	//unsigned char signal[]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};//AXI传输协议
+
+	/*在DDR中写入4096个数,用于测试*/
+/*	for(i=0;i<4096;i++)
+		{
+			Xil_Out16(DDR_BASEADDR+i*2,i);
+		}
+*/
+/*******************************************信号发生器子函数*******************************************************/
+	u8_t A_adj(u8_t a1,u8_t a2,u8_t a_u)
+			{
+				u8_t A_temp=0;
+				if(a_u==0x00)
+				{
+					A_temp=(a1+a2*16*16)/50;
+				}
+				else if(a_u==0x01)
+				{
+					A_temp=(a1+a2*16*16)*1000/50;
+				}
+				return A_temp;
+			}
+
+	u32_t F_adj(u8_t f1,u8_t f2,u8_t f3,u8_t f4,u8_t f_u)
+			{
+				u32_t f_temp=0;
+				if(f_u==0x00)
+				{
+					f_temp = (f1+f2*256U+f3*256U*256U+f4*256U*256U*256U)/50000000.0L*67108864.0L;
+				}
+				else if(f_u==0x01)
+				{
+					f_temp=(f1+f2*256U+f3*256U*256U+f4*256U*256U*256U)/50000.0L*67108864.0L;
+				}
+				else if(f_u==0x02)
+				{
+					f_temp=(f1+f2*256U+f3*256U*256U+f4*256U*256U*256U)/50.0L*67108864.0L;
+				}
+				return f_temp;
+			}
+
+	u8_t offset_adj(u8_t os1,u8_t os2,u8_t os_u)
+			{
+				u8_t OS_temp=0;
+				if(os_u==0x00)
+				{
+					OS_temp=(os1+os2*256)/50;
+				}
+				else if(os_u==0x01)
+				{
+					OS_temp=(os1+os2*256)*1000/50;
+				}
+				return OS_temp;
+			}
+
+
+/*******************************************水平采样子函数*******************************************************/
+	err_t autu_sample(u16_t show)
+			{
+				for(k=0,m=0;m<show;k++,m++)
+				{
+					test_wave[m]=Xil_In16(DDR_BASEADDR+2*k);
+				}
+				test_len=2*show;
+				err = tcp_write(tpcb,test_wave,test_len,1);
+				return 0;
+			}
+	err_t autu_sample_data(u16_t s)
+				{
+					for(k=0,m=0;m<2500;k=k+s,m++)
+					{
+						test_wave[m]=Xil_In16(DDR_BASEADDR+2*k);
+					}
+					test_len=5000;
+
+					err = tcp_write(tpcb,test_wave,test_len,1);
+					return 0;
+				}
+	err_t unautu_sample(u16_t show)
+		{
+			for(k=0,m=0;m<show;k++,m++)
+			{
+				if(show%2==0)
+				{
+					test_wave[m]=Xil_In16(DDR_BASEADDR+2*(k+q-show/2));
+				}
+				else if(show%2==1)
+				{
+					test_wave[m]=Xil_In16(DDR_BASEADDR+2*(k+q-(show-1)/2));
+				}
+
+			}
+			test_len=2*show;
+			err = tcp_write(tpcb,test_wave,test_len,1);
+			return 0;
+		}
+		err_t unautu_sample_data(u16_t s)
+			{
+			    for(k=0,m=0;m<show;k=k+s,m++)
+				{
+				test_wave[m]=Xil_In16(DDR_BASEADDR+2*k-2500+2*k);
+				}
+				test_len=5000;
+
+				err = tcp_write(tpcb,test_wave,test_len,1);
+				return 0;
+			}
+		err_t autu_DDR_sample_data()
+		{
+					if(horizontal_resolution==0x01)
+						{
+							show=25;
+							autu_sample(show);
+						}
+						else if(horizontal_resolution==0x02)
+						{
+							show=50;
+							autu_sample(show);
+
+						}
+						else if(horizontal_resolution==0x03)
+						{
+							show=125;
+							autu_sample(show);
+						}
+						else if(horizontal_resolution==0x04)
+						{
+							show=250;
+							autu_sample(show);
+						}
+						else if(horizontal_resolution==0x05)
+						{
+							show=500;
+							autu_sample(show);
+						}
+						else if(horizontal_resolution==0x06)
+						{
+							show=1250;
+							autu_sample(show);
+						}
+						else if(horizontal_resolution==0x07)
+						{
+							show=2500;
+							autu_sample(show);
+						}
+						else if(horizontal_resolution==0x08)
+						{
+							s=2;
+							autu_sample_data(s);
+						}
+						else if(horizontal_resolution==0x09)
+						{
+							s=5;
+							autu_sample_data(s);
+						}
+						else if(horizontal_resolution==0x0A)
+						{
+							s=10;
+							autu_sample_data(s);
+						 }
+						else if(horizontal_resolution==0x0B)
+						{
+							s=20;
+							autu_sample_data(s);
+						}
+						else if(horizontal_resolution==0x0C)
+						{
+							s=50;
+							autu_sample_data(s);
+						}
+						else if(horizontal_resolution==0x0D)
+						{
+							s=100;
+							autu_sample_data(s);
+						}
+			return 0;
+		}
+		err_t unautu_DDR_sample_data()
+				{
+					if(horizontal_resolution==0x01)
+						{
+							show=25;
+							for(q=0;((*(volatile u16 *)(DDR_BASEADDR+q*2))<trigger0)||(q<((show-1)/2));q++)
+							{}
+							unautu_sample(show);
+						}
+						else if(horizontal_resolution==0x02)
+						{
+							show=50;
+							unautu_sample(show);
+						}
+						else if(horizontal_resolution==0x03)
+						{
+							show=125;
+							for(q=0;(*(volatile u16 *)(DDR_BASEADDR+q*2))<trigger0&&(q-(show-1)/2)>0;q++)
+							{}
+							unautu_sample(show);
+						}
+						else if(horizontal_resolution==0x04)
+						{
+							show=250;
+							unautu_sample(show);
+						}
+						else if(horizontal_resolution==0x05)
+						{
+							show=500;
+							unautu_sample(show);
+						}
+						else if(horizontal_resolution==0x06)
+						{
+							show=1250;
+							unautu_sample(show);
+						}
+						else if(horizontal_resolution==0x07)
+						{
+							show=2500;
+							unautu_sample(show);
+						}
+						else if(horizontal_resolution==0x08)
+						{
+							s=2;
+							unautu_sample(show);
+						}
+						else if(horizontal_resolution==0x09)
+						{
+							s=5;
+							unautu_sample(show);
+						}
+						else if(horizontal_resolution==0x0A)
+						{
+							s=10;
+							unautu_sample(show);
+						 }
+						else if(horizontal_resolution==0x0B)
+						{
+							s=20;
+							unautu_sample(show);
+						}
+						else if(horizontal_resolution==0x0C)
+						{
+							s=50;
+							unautu_sample(show);
+						}
+						else if(horizontal_resolution==0x0D)
+						{
+							s=100;
+							unautu_sample(show);
+						}
+					return 0;
+				}
+	/* do not read the packet if we are not in ESTABLISHED state */
+	if (!p) {
+		tcp_close(tpcb);
+		tcp_recv(tpcb, NULL);
+		return ERR_OK;
+	}
+
+
+
+	/* indicate that the packet has been received */
+	tcp_recved(tpcb, p->len);
+
+	/* echo back the payload */
+	/* in this case, we assume that the payload is < TCP_SND_BUF */
+	if (tcp_sndbuf(tpcb) > p->len) {
+		err = tcp_write(tpcb, p->payload, p->len, 1);
+	} else
+		xil_printf("no space in tcp_sndbuf\n\r");
+
+
+
+
+
+
+#if 1
+/*******************************************示波器指令配置网络*******************************************************/
+if (1)
+{
+	a[0]=*((char *)(p->payload));//仪器
+	(p->payload)++;
+	a[1]=*((char *)(p->payload));//指令类型
+	(p->payload)++;
+	a[2]=*((char *)(p->payload));//通道
+	(p->payload)++;
+	a[3]=*((char *)(p->payload));//功能
+	(p->payload)++;
+	a[4]=*((char *)(p->payload));//参数字节 or 波形
+	(p->payload)++;
+	a[5]=*((char *)(p->payload));//垂直分辨率 or 幅度
+	(p->payload)++;
+	a[6]=*((char *)(p->payload));//触发方式 or 幅度
+	(p->payload)++;
+	a[7]=*((char *)(p->payload));//触发沿 or 幅度单位
+	(p->payload)++;
+	a[8]=*((char *)(p->payload));//频率
+	(p->payload)++;
+	a[9]=*((char *)(p->payload));
+	(p->payload)++;
+	a[10]=*((char *)(p->payload));
+	(p->payload)++;
+	a[11]=*((char *)(p->payload));
+	(p->payload)++;
+	a[12]=*((char *)(p->payload));//频率单位
+	(p->payload)++;
+	a[13]=*((char *)(p->payload));//直流偏移  or 之后10个随机点
+	(p->payload)++;
+	a[14]=*((char *)(p->payload));
+	(p->payload)++;
+	a[15]=*((char *)(p->payload));//直流偏移单位
+	(p->payload)++;
+	a[16]=*((char *)(p->payload));//占空比
+	(p->payload)++;
+	a[17]=*((char *)(p->payload));
+	(p->payload)++;
+	a[18]=*((char *)(p->payload));
+	(p->payload)++;
+	a[19]=*((char *)(p->payload));
+	(p->payload)++;
+	a[20]=*((char *)(p->payload));
+	(p->payload)++;
+	a[21]=*((char *)(p->payload));
+	(p->payload)++;
+	a[22]=*((char *)(p->payload));
+	(p->payload)++;
+
+/*示波器*/
+	if(a[0]==0x01)
+	{
+	  if(a[1]==0x01)
+	  {
+		if(a[2]==0x01)
+		{
+			if(a[3]==0x01)
+			{
+			vertical_resolution1=a[4];
+			//需添加   向程控增益放大器发送此时的垂直分辨率
+			err = tcp_write(tpcb,ok,2,1);
+			}
+		}
+		else if(a[2]==0x02)
+		{
+			if(a[3]==0x01)
+			{
+			vertical_resolution2=a[4];
+			//需添加   向程控增益放大器发送此时的垂直分辨率
+			err = tcp_write(tpcb,ok,2,1);
+			}
+		}
+
+		else if(a[2]==0x03)
+		{
+			if(a[3]==0x03)
+			{
+			trigger0=a[4];
+			trigger1=a[5];
+			trigger2=a[6];
+		    err = tcp_write(tpcb,ok,2,1);
+			}
+		}
+		else if(a[2]==0x04)
+		{
+			if(a[3]==0x01)
+			{
+			horizontal_resolution=a[4];
+			err = tcp_write(tpcb,ok,2,1);
+			}
+		}
+
+	  }
+	   else if(a[1]==0x02)
+	   {
+		 if(a[2]==0x01)
+		 {
+			 //运行
+			 send_flag=0x01;
+			 horizontal_resolution=0x01;
+		  }
+	  }
+	}
+	/*信号源*/
+	else if(a[0]==0x02)//信号发生器
+		{
+			if(a[1]==0x02)
+			{
+				if(a[2]==0x01)//通道一
+				{
+					if(a[3]==0x01)
+					{
+						xil_printf("\n\r\n\rchannel1_OK\n\r");
+						trans_flag1=0x01;
+					}
+					else if(a[3]==0x02)
+					{
+						xil_printf("\n\r\n\rchannel1_stop\n\r");
+						trans_flag1=0x00;
+					}
+				}
+				else if(a[2]==0x02)//通道二
+				{
+					if(a[3]==0x01)
+					{
+						xil_printf("\n\r\n\rchannel2_OK\n\r");
+						trans_flag2=0x01;
+					}
+					else if(a[3]==0x02)
+					{
+						xil_printf("\n\r\n\rchannel2_stop\n\r");
+						trans_flag2=0x00;
+					}
+				}
+			}
+			else if(a[1]==0x01)//传递参数
+			{
+				if(a[2]==0x01)//通道一
+				{
+					channel_flag=0x01;
+					//信号解码
+					{
+						if(a[3]==0x01)//信号正常
+						{
+							if(a[4]==0x03)
+							{
+								xil_printf("\n\r\n\r正弦波\n\r");
+								w1=0x01;
+								A1=A_adj(a[5],a[6],a[7]);
+								K1=F_adj(a[8],a[9],a[10],a[11],a[12]);
+								OS1=offset_adj(a[13],a[14],a[15]);
+							}
+							else if(a[4]==0x04)
+							{
+								xil_printf("\n\r\n\r方波\n\r");
+								w1=0x02;
+								A1=A_adj(a[5],a[6],a[7]);
+								K1=F_adj(a[8],a[9],a[10],a[11],a[12]);
+								OS1=offset_adj(a[13],a[14],a[15]);
+							}
+							else if(a[4]==0x05)
+							{
+								xil_printf("\n\r\n\r三角波\n\r");
+								w1=0x03;
+								A1=A_adj(a[5],a[6],a[7]);
+								K1=F_adj(a[8],a[9],a[10],a[11],a[12]);
+								OS1=offset_adj(a[13],a[14],a[15]);
+							}
+							else if(a[4]==0x06)
+							{
+								xil_printf("\n\r\n\r任意波\n\r");
+
+							}
+							xil_printf("channel1para=%d\n%u\n%d\n%d",A1,K1,OS1,channel_flag);
+						}
+					}
+				}
+				else if(a[2]==0x02)
+				{
+					channel_flag=0x02;
+					//信号解码
+					{
+						if(a[3]==0x01)//信号正常
+						{
+							if(a[4]==0x03)
+							{
+								xil_printf("\n\r\n\r正弦波\n\r");
+								w2=0x01;
+								A2=A_adj(a[5],a[6],a[7]);
+								K2=F_adj(a[8],a[9],a[10],a[11],a[12]);
+								OS2=offset_adj(a[13],a[14],a[15]);
+							}
+							else if(a[4]==0x04)
+							{
+								xil_printf("\n\r\n\r方波\n\r");
+								w2=0x02;
+								A2=A_adj(a[5],a[6],a[7]);
+								K2=F_adj(a[8],a[9],a[10],a[11],a[12]);
+								OS2=offset_adj(a[13],a[14],a[15]);
+							}
+							else if(a[4]==0x05)
+							{
+								xil_printf("\n\r\n\r三角波\n\r");
+								w2=0x03;
+								A2=A_adj(a[5],a[6],a[7]);
+								K2=F_adj(a[8],a[9],a[10],a[11],a[12]);
+								OS2=offset_adj(a[13],a[14],a[15]);
+							}
+							else if(a[4]==0x06)
+							{
+								xil_printf("\n\r\n\r任意波\n\r");
+
+							}
+							xil_printf("channel2para=%d\n%u\n%d\n%d",A2,K2,OS2,channel_flag);
+						}
+					}
+				}
+			}
+		}
+   }
+  else {
+ 	err = tcp_write(tpcb,error,2,1);
+ 	legal_flag=0x00;
+ 	}
+
+/*信号发生器是否传输*/
+	if(trans_flag1==0x01)
+	{
+		x11=DDS_AXI_mReadReg(DDS_BASEADDR, 0);
+		x12=DDS_AXI_mReadReg(DDS_BASEADDR, 4);
+		x13=DDS_AXI_mReadReg(DDS_BASEADDR, 8);
+		x14=DDS_AXI_mReadReg(DDS_BASEADDR, 12);
+		if((x11==w1)&&(x12==A1)&&(x13==K1)&&(x14==OS1))
+		{
+			xil_printf("channel1 stay the same");
+		}
+		else
+		{
+			DDS_AXI_mWriteReg(DDS_BASEADDR, 0, w1);
+			DDS_AXI_mWriteReg(DDS_BASEADDR, 4, A1);
+			DDS_AXI_mWriteReg(DDS_BASEADDR, 8, K1);
+			DDS_AXI_mWriteReg(DDS_BASEADDR, 12, OS1);
+			xil_printf("channel1=%d,%d,%d,%d",x11,x12,x13,x14);
+		}
+	}
+	else
+	{
+
+	}
+	if(trans_flag2==0x01)
+	{
+		x21=DDS_AXI_mReadReg(DDS_BASEADDR, 16);
+		x22=DDS_AXI_mReadReg(DDS_BASEADDR, 20);
+		x23=DDS_AXI_mReadReg(DDS_BASEADDR, 24);
+		x24=DDS_AXI_mReadReg(DDS_BASEADDR, 28);
+		if((x21==w2)&&(x22==A2)&&(x23==K2)&&(x24==OS2))
+		{
+			xil_printf("channel2 stay the same");
+		}
+		else
+		{
+			DDS_AXI_mWriteReg(DDS_BASEADDR, 16, w2);
+			DDS_AXI_mWriteReg(DDS_BASEADDR, 20, A2);
+			DDS_AXI_mWriteReg(DDS_BASEADDR, 24, K2);
+			DDS_AXI_mWriteReg(DDS_BASEADDR, 28, OS2);
+			xil_printf("channel2=%d,%d,%d,%d",x21,x22,x23,x24);
+		}
+	}
+/*******************************************示波器数据回复判断网络*******************************************************/
+
+if(send_flag==0x01)
+{
+	if(trigger1==0x02)
+	{
+		autu_DDR_sample_data();
+	}
+	else if(trigger1==0x01)
+	{
+		if(trigger2==0x01)
+		{
+		unautu_DDR_sample_data();
+		}
+		else if(trigger2==0x02)
+		{
+		for(k=0;(*(volatile u16 *)(DDR_BASEADDR+k*2))>trigger0;k++)
+		{}
+		unautu_DDR_sample_data();
+		}
+		else if(trigger2==0x03)
+		{
+		for(k=0;(*(volatile u16 *)(DDR_BASEADDR+k*2))<trigger0||(*(volatile u16 *)(DDR_BASEADDR+k*2))>trigger0;k++)
+		{
+		}
+		unautu_DDR_sample_data();
+		}
+	}
+	else  autu_DDR_sample_data();
+}
+
+
+
+#endif
+	/* free the received pbuf */
+	pbuf_free(p);
+
+	return ERR_OK;
+}
+
+err_t accept_callback(void *arg, struct tcp_pcb *newpcb, err_t err)
+{
+	static int connection = 1;
+
+	/* set the receive callback for this connection */
+	tcp_recv(newpcb, recv_callback);
+
+	/* just use an integer number indicating the connection id as the
+	   callback argument */
+	tcp_arg(newpcb, (void*)(UINTPTR)connection);
+
+	/* increment for subsequent accepted connections */
+	connection++;
+
+	return ERR_OK;
+}
+
+
+int start_application()
+{
+	struct tcp_pcb *pcb;
+	err_t err;
+	unsigned port = 7;
+
+	/* create new TCP PCB structure */
+	pcb = tcp_new();
+	if (!pcb) {
+		xil_printf("Error creating PCB. Out of Memory\n\r");
+		return -1;
+	}
+
+	/* bind to specified @port */
+	err = tcp_bind(pcb, IP_ADDR_ANY, port);
+	if (err != ERR_OK) {
+		xil_printf("Unable to bind to port %d: err = %d\n\r", port, err);
+		return -2;
+	}
+
+	/* we do not need any arguments to callback functions */
+	tcp_arg(pcb, NULL);
+
+	/* listen for connections */
+	pcb = tcp_listen(pcb);
+	if (!pcb) {
+		xil_printf("Out of memory while tcp_listen\n\r");
+		return -3;
+	}
+
+	/* specify callback to use for incoming connections */
+	tcp_accept(pcb, accept_callback);
+
+	xil_printf("TCP echo server started @ port %d\n\r", port);
+
+	return 0;
+}

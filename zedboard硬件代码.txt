@@ -1,0 +1,121 @@
+	// Add user logic here       
+        wire [15:0]wave1;
+        wire [15:0]wave2;
+        reg temp1;
+        reg temp2;
+        reg a;
+        reg [11:0]wave_out_temp;
+        
+            DDS DDS_channel1(.mclk(S_AXI_ACLK),
+            .rst_n(rst_n),
+            .fword(slv_reg2[25:0]),
+            .ch(slv_reg0[1:0]),
+            .da_data(wave1)
+            );
+            
+            DDS DDS_channel2(.mclk(S_AXI_ACLK),
+            .rst_n(rst_n),
+            .fword(slv_reg6[25:0]),
+            .ch(slv_reg4[1:0]),
+            .da_data(wave2)
+            );
+         always@( posedge S_AXI_ACLK  or negedge rst_n)
+         begin
+         if(!rst_n)
+         temp1=1'b0;
+         else
+         temp1=temp1+1'b1;
+         end
+         
+         always@( negedge S_AXI_ACLK  or negedge rst_n)
+         begin
+         if(!rst_n)
+         temp2=1'b0;
+         else
+         temp2=temp2+1'b1;
+         end
+        always@(*)
+        begin
+        if(temp1==temp2)
+        a=1'b0;
+        else
+        a=1'b1;
+        end
+        
+        always@(*)
+         begin
+         if(!rst_n)
+         begin
+         wave_out_temp=12'b101010101010;
+         end
+         else
+         begin
+         case(a)
+                1'b0:wave_out_temp=wave1[11:0];
+                1'b1:wave_out_temp=wave2[11:0];
+                default:wave_out_temp=12'b111100001111;
+         endcase
+         end
+         end
+        assign wave_out=wave_out_temp; 
+	// User logic ends
+
+	
+	 module DDS(
+                   input mclk,
+                   input rst_n,
+                   input [25:0]fword,//frequency control
+                   input [1:0]ch,
+                   
+                   output reg [15:0]da_data
+           );
+           
+           wire [15:0]da_data1;
+           wire [15:0]da_data2;
+           wire [15:0]da_data3;
+           reg [25:0]fcnt;
+       
+           
+           wire [11:0]addr_rom;
+           
+             
+           always @(posedge mclk or negedge rst_n)
+           begin
+               if(!rst_n)
+                   fcnt <= 26'd0;
+               else
+                   fcnt <= fcnt + fword;
+               end
+           
+           assign addr_rom = fcnt[25:14];
+           
+           //custom sin_rom
+           sin_rom sin_rom (
+           .clka(mclk),    // input wire clka
+           .addra(addr_rom),  // input wire [11 : 0] addra
+           .douta(da_data1)  // output wire [11 : 0] douta
+           );
+           
+           square_rom square_rom (
+           .clka(mclk),    // input wire clka
+           .addra(addr_rom),  // input wire [11 : 0] addra
+           .douta(da_data2)  // output wire [11 : 0] douta
+           );
+               
+           triangular_rom triangular_rom (
+           .clka(mclk),    // input wire clka
+           .addra(addr_rom),  // input wire [11 : 0] addra
+           .douta(da_data3)  // output wire [11 : 0] douta
+           );
+           
+           always @(posedge mclk)
+           begin
+           case(ch)
+           2'b01:da_data=da_data2[11:0];
+           2'b10:da_data=da_data2[11:0];
+           2'b11:da_data=da_data2[11:0];
+           default:da_data=12'b010101010101;
+           endcase
+           end
+       
+       endmodule
